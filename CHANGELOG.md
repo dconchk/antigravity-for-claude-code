@@ -5,6 +5,12 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
 
 ## 0.26.0
 
+- **agy's response-wait timeout now classifies as TIMEOUT (exit 12), not a generic
+  failure.** Measured on agy 1.1.22: when print mode gives up waiting for the model's
+  response the envelope carries `status ERROR, error "timeout waiting for response"`
+  and agy exits 1 — a string none of the timeout patterns matched, so three real
+  ~10-minute turns reported the generic `AGY_FAILED — agy exited 1` and read as
+  provider weather instead of the timeout they were.
 - **`--fresh` guarantees a new conversation.** Measured on agy 1.1.22: every headless
   launch without a conversation flag lands in agy's shared `default-cli-project`
   regardless of working directory, and a parallel same-repo caller can be served a

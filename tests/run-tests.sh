@@ -107,6 +107,7 @@ case "${STUB_MODE:-text}" in
   quota)   echo "Error: quota exceeded for this model" >&2; exit 1 ;;     # -> wrapper exit 10
   auth)    echo "Error: request is unauthenticated; please sign in" >&2; exit 1 ;; # -> exit 11
   timeout) echo "Error: deadline exceeded (the request timed out)" >&2; exit 1 ;;  # -> exit 12
+  waittimeout) echo "timeout waiting for response" >&2; exit 1 ;;  # agy 1.1.22 response-wait shape -> exit 12
   badmodel) echo "Error: invalid --model \"X\": model X is not recognized as a known model" >&2; exit 1 ;; # -> exit 14
   softdeny) echo "no output produced — a tool required the \"write_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow" >&2; exit 0 ;; # rc=0 + empty stdout -> exit 15
   big)     printf 'x%.0s' $(seq 1 20000); echo ;;    # dump-sized reply -> digest guard warns
@@ -216,6 +217,9 @@ check "agy auth -> exit 11 + signal" 11 "$rc" "AUTH_REQUIRED" "$out"
 
 out=$(STUB_MODE=timeout "$DELEGATE" "hi" 2>&1); rc=$?
 check "agy timeout -> exit 12 + signal" 12 "$rc" "TIMEOUT" "$out"
+
+out=$(STUB_MODE=waittimeout "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy response-wait timeout (1.1.22 shape) -> exit 12 + signal" 12 "$rc" "TIMEOUT" "$out"
 
 out=$(STUB_MODE=badmodel "$DELEGATE" "hi" 2>&1); rc=$?
 check "agy bad --model -> exit 14 + signal" 14 "$rc" "MODEL_UNAVAILABLE" "$out"

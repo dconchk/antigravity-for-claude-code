@@ -528,8 +528,12 @@ $blob"
       shopt -u nocasematch; signal QUOTA_EXHAUSTED "agy quota / rate limit"; exit 10 ;;
     *unauthenticated*|*unauthorized*|*"sign in"*|*"please authenticate"*|*reauth*)
       shopt -u nocasematch; signal AUTH_REQUIRED "agy not authenticated — run \`agy\` once"; exit 11 ;;
-    *"timed out"*|*"deadline exceeded"*|*"print-timeout"*)
-      shopt -u nocasematch; signal TIMEOUT "agy print-timeout / deadline exceeded"; exit 12 ;;
+    *"timed out"*|*"deadline exceeded"*|*"print-timeout"*|*"timeout waiting for response"*)
+      # "timeout waiting for response" is agy's own print-mode response wait giving up
+      # (measured on 1.1.22: three real ~10-minute turns, JSON envelope status ERROR with
+      # exactly that string, exit 1). It fell through to the generic AGY_FAILED before,
+      # which read as provider weather instead of the timeout it is.
+      shopt -u nocasematch; signal TIMEOUT "agy print-timeout / deadline exceeded / response wait gave up"; exit 12 ;;
     *"invalid --model"*|*"is not recognized as a known model"*|*"not a known model"*)
       # agy >= 1.1.2 hard-fails (instead of silently downgrading) when --model can't be
       # resolved — common when a tier_* / default_model remap points at a model this plan
