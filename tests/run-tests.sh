@@ -107,6 +107,7 @@ case "${STUB_MODE:-text}" in
   quota)   echo "Error: quota exceeded for this model" >&2; exit 1 ;;     # -> wrapper exit 10
   auth)    echo "Error: request is unauthenticated; please sign in" >&2; exit 1 ;; # -> exit 11
   timeout) echo "Error: deadline exceeded (the request timed out)" >&2; exit 1 ;;  # -> exit 12
+  waittimeout) echo "timeout waiting for response" >&2; exit 1 ;;  # agy 1.1.22 response-wait shape -> exit 12
   badmodel) echo "Error: invalid --model \"X\": model X is not recognized as a known model" >&2; exit 1 ;; # -> exit 14
   softdeny) echo "no output produced — a tool required the \"write_file\" permission that headless mode cannot prompt for, so it was auto-denied. Add an allow-rule under permissions.allow" >&2; exit 0 ;; # rc=0 + empty stdout -> exit 15
   big)     printf 'x%.0s' $(seq 1 20000); echo ;;    # dump-sized reply -> digest guard warns
@@ -216,6 +217,9 @@ check "agy auth -> exit 11 + signal" 11 "$rc" "AUTH_REQUIRED" "$out"
 
 out=$(STUB_MODE=timeout "$DELEGATE" "hi" 2>&1); rc=$?
 check "agy timeout -> exit 12 + signal" 12 "$rc" "TIMEOUT" "$out"
+
+out=$(STUB_MODE=waittimeout "$DELEGATE" "hi" 2>&1); rc=$?
+check "agy response-wait timeout (1.1.22 shape) -> exit 12 + signal" 12 "$rc" "TIMEOUT" "$out"
 
 out=$(STUB_MODE=badmodel "$DELEGATE" "hi" 2>&1); rc=$?
 check "agy bad --model -> exit 14 + signal" 14 "$rc" "MODEL_UNAVAILABLE" "$out"
@@ -428,6 +432,19 @@ check "--print-command -> exit 0 + resolved flags" 0 "$rc" "--print-timeout 5m" 
 check "--print-command shows the tier model" 0 "$rc" "Pro" "$out"
 out=$(PATH="/usr/bin:/bin" "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
 check "--print-command works without agy on PATH" 0 "$rc" "--print-timeout" "$out"
+
+# --fresh: a new cwd-keyed project guarantees a new conversation (HOPPER run 24:
+# two same-repo worktree callers were served one default-project conversation).
+out=$("$DELEGATE" --fresh --print-command "hi" 2>/dev/null); rc=$?
+check "--fresh -> --new-project in the resolved command" 0 "$rc" -- "--new-project" "$out"
+out=$("$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+if printf '%s' "$out" | grep -q -- "--new-project"; then
+  echo "FAIL: --new-project leaked into the resolved command without --fresh"; FAIL=$((FAIL+1));
+else echo "ok: no --new-project without --fresh"; PASS=$((PASS+1)); fi
+out=$("$DELEGATE" --fresh -c --print-command "hi" 2>&1); rc=$?
+check "--fresh with --continue refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
+out=$("$DELEGATE" --fresh --conversation abc123 --print-command "hi" 2>&1); rc=$?
+check "--fresh with --conversation refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
 
 # write-task without --yolo -> warn (workspace untouched; issue #10).
 # --mode accept-edits stopped granting headless writes on agy 1.1.3, so it still warns.

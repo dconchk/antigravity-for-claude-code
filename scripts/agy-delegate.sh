@@ -34,6 +34,12 @@
 #                                    permissions.allow rule or --yolo. plan: strategize only.
 #   -c, --continue                   Resume the most recent agy conversation (stateful)
 #       --conversation <id>          Resume a specific agy conversation by ID (stateful)
+#       --fresh                      Guarantee a NEW conversation: create a new agy project
+#                                    keyed to the working directory (agy --new-project;
+#                                    measured on agy 1.1.22). Without it every headless turn
+#                                    lands in agy's shared default-cli-project, where a
+#                                    parallel same-repo caller can be served a CONTINUATION
+#                                    of another caller's conversation instead of a new one.
 #   -m, --model <exact name>         Use an exact agy model (any from `agy models`: Gemini/Claude/GPT…)
 #       --print-command              Print the resolved agy command and exit (dry run)
 #   -h, --help                       Show this help
@@ -72,6 +78,7 @@ ADD_DIRS=()
 PROMPT=""
 CONTINUE=0
 CONV_ID=""
+FRESH=0
 PRINT_CMD=0
 
 die() { echo "agy-delegate: $*" >&2; exit 1; }
@@ -218,6 +225,7 @@ while [ $# -gt 0 ]; do
                     esac ;;
     -c|--continue)  CONTINUE=1; shift ;;            # resume most recent agy conversation
     --conversation) need "$#" "$1"; CONV_ID="$2"; shift 2 ;; # resume a specific conversation by ID
+    --fresh)        FRESH=1; shift ;;               # force a new conversation via a new cwd-keyed project
     -m|--model)     need "$#" "$1"; MODEL="$2"; shift 2 ;;
     --print-command) PRINT_CMD=1; shift ;;          # dry run: show the resolved agy command
     -h|--help)      usage ;;
@@ -227,6 +235,12 @@ while [ $# -gt 0 ]; do
     *)              PROMPT="$*"; break ;;            # rest is the prompt
   esac
 done
+
+# --fresh promises a conversation nothing else has touched; a resume flag asks for
+# the opposite. Refuse the combination rather than letting one silently win.
+if [ "$FRESH" -eq 1 ] && { [ "$CONTINUE" -eq 1 ] || [ -n "$CONV_ID" ]; }; then
+  die "--fresh guarantees a new conversation and cannot be combined with -c/--continue or --conversation"
+fi
 
 [ -n "$PROMPT" ] || die "no prompt given (pass a string, or '-' to read stdin)"
 # --print-command is a dry run (introspection), so it doesn't require agy on PATH.
@@ -314,6 +328,7 @@ for d in "${ADD_DIRS[@]:-}"; do [ -n "$d" ] && ARGS+=(--add-dir "$d"); done
 [ "$SANDBOX" -eq 1 ]   && ARGS+=(--sandbox)
 [ "$CONTINUE" -eq 1 ]  && ARGS+=(--continue)        # keep working context on the cheap (Gemini) side
 [ -n "$CONV_ID" ]      && ARGS+=(--conversation "$CONV_ID")
+[ "$FRESH" -eq 1 ]     && ARGS+=(--new-project)     # a new project cannot hold an old conversation
 
 # --- structured output (agy >= 1.1.8) -----------------------------------------
 # agy gained `--output-format json`, which is strictly better for a wrapper than
@@ -513,8 +528,12 @@ $blob"
       shopt -u nocasematch; signal QUOTA_EXHAUSTED "agy quota / rate limit"; exit 10 ;;
     *unauthenticated*|*unauthorized*|*"sign in"*|*"please authenticate"*|*reauth*)
       shopt -u nocasematch; signal AUTH_REQUIRED "agy not authenticated — run \`agy\` once"; exit 11 ;;
-    *"timed out"*|*"deadline exceeded"*|*"print-timeout"*)
-      shopt -u nocasematch; signal TIMEOUT "agy print-timeout / deadline exceeded"; exit 12 ;;
+    *"timed out"*|*"deadline exceeded"*|*"print-timeout"*|*"timeout waiting for response"*)
+      # "timeout waiting for response" is agy's own print-mode response wait giving up
+      # (measured on 1.1.22: three real ~10-minute turns, JSON envelope status ERROR with
+      # exactly that string, exit 1). It fell through to the generic AGY_FAILED before,
+      # which read as provider weather instead of the timeout it is.
+      shopt -u nocasematch; signal TIMEOUT "agy print-timeout / deadline exceeded / response wait gave up"; exit 12 ;;
     *"invalid --model"*|*"is not recognized as a known model"*|*"not a known model"*)
       # agy >= 1.1.2 hard-fails (instead of silently downgrading) when --model can't be
       # resolved — common when a tier_* / default_model remap points at a model this plan
