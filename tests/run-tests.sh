@@ -429,6 +429,19 @@ check "--print-command shows the tier model" 0 "$rc" "Pro" "$out"
 out=$(PATH="/usr/bin:/bin" "$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
 check "--print-command works without agy on PATH" 0 "$rc" "--print-timeout" "$out"
 
+# --fresh: a new cwd-keyed project guarantees a new conversation (HOPPER run 24:
+# two same-repo worktree callers were served one default-project conversation).
+out=$("$DELEGATE" --fresh --print-command "hi" 2>/dev/null); rc=$?
+check "--fresh -> --new-project in the resolved command" 0 "$rc" -- "--new-project" "$out"
+out=$("$DELEGATE" --print-command "hi" 2>/dev/null); rc=$?
+if printf '%s' "$out" | grep -q -- "--new-project"; then
+  echo "FAIL: --new-project leaked into the resolved command without --fresh"; FAIL=$((FAIL+1));
+else echo "ok: no --new-project without --fresh"; PASS=$((PASS+1)); fi
+out=$("$DELEGATE" --fresh -c --print-command "hi" 2>&1); rc=$?
+check "--fresh with --continue refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
+out=$("$DELEGATE" --fresh --conversation abc123 --print-command "hi" 2>&1); rc=$?
+check "--fresh with --conversation refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
+
 # write-task without --yolo -> warn (workspace untouched; issue #10).
 # --mode accept-edits stopped granting headless writes on agy 1.1.3, so it still warns.
 # Match the stable part of the sentence, not the whole thing: this string has been

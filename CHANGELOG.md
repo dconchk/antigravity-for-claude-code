@@ -3,6 +3,17 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.26.0
+
+- **`--fresh` guarantees a new conversation.** Measured on agy 1.1.22: every headless
+  launch without a conversation flag lands in agy's shared `default-cli-project`
+  regardless of working directory, and a parallel same-repo caller can be served a
+  continuation of another caller's conversation instead of a new one (observed live:
+  two linked worktrees of one repository, the second caller's stdout carried the first
+  caller's result). `--fresh` passes agy `--new-project`, which keys a new project to
+  the working directory — a new project cannot hold an old conversation. Refused in
+  combination with `-c/--continue` or `--conversation`, which ask for the opposite.
+
 ## 0.25.2
 
 - **agy-delegate.sh no longer burns a CPU core on large outputs on macOS.** The two
