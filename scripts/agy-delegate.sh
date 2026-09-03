@@ -24,6 +24,9 @@
 #   -d, --dir  <path>                Add a workspace dir (repeatable)
 #       --timeout <dur>              Print-mode timeout, e.g. 10m (default: 5m)
 #       --yolo                       Auto-approve all tool permissions (DANGEROUS)
+#       --json-schema <str|path>     Enforce structured output: forwarded to agy's own --json-schema
+#                                    (agy >= 1.1.8, JSON mode). With a schema, stdout is the
+#                                    `structured_output` object agy returns, not the prose response.
 #       --sandbox                    Run agent with terminal sandbox restrictions
 #       --digest                     Append a digest-only output contract to the prompt
 #                                    (ingest digests, not raw dumps — the biggest cost lever)
@@ -49,6 +52,7 @@
 #             | 15 permission denied — a tool needed permission headless. BOTH shapes:
 #             |    agy 1.1.3's soft deny (rc 0, empty stdout) and 1.1.13's hard error
 #             |    (rc 1, "user denied permission"). Add a permissions.allow rule, or --yolo
+#             | 16 schema unmet — --json-schema was passed and agy returned no structured_output
 #
 # On a classifiable failure, a machine-readable line is printed to stderr so
 # orchestrators (e.g. agy-job.sh) can react without scraping prose:
@@ -71,6 +75,7 @@ TIMEOUT="${CLAUDE_PLUGIN_OPTION_TIMEOUT:-5m}"
 TIER_EXPLICIT=0
 MODEL=""
 YOLO=0
+JSON_SCHEMA=""
 SANDBOX=0
 DIGEST=0
 MODE=""
@@ -217,6 +222,7 @@ while [ $# -gt 0 ]; do
     -d|--dir)       need "$#" "$1"; ADD_DIRS+=("$2"); shift 2 ;;
     --timeout)      need "$#" "$1"; TIMEOUT="$2"; shift 2 ;;
     --yolo)         YOLO=1; shift ;;
+    --json-schema)  need "$#" "$1"; JSON_SCHEMA="$2"; shift 2 ;;
     --sandbox)      SANDBOX=1; shift ;;
     --digest)       DIGEST=1; shift ;;               # ask agy for a digest-only reply
     --mode)         need "$#" "$1"; MODE="$2"; shift 2
@@ -388,6 +394,19 @@ case "$(printf '%s' "$raw_so" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     fi ;;
 esac
 
+# --- structured output enforcement (--json-schema) -----------------------------
+# Forwarded to agy's own --json-schema, which the CLI enforces on the final result and
+# returns as `structured_output`. It needs JSON mode (the CLI applies a schema only with
+# --output-format json), so a wrapper that could not turn JSON mode on refuses rather
+# than silently dropping the flag — a caller who asked for structure and got prose has
+# no way to find out. With a schema, stdout is the structured_output object.
+if [ -n "$JSON_SCHEMA" ]; then
+  if [ "$JSON_MODE" -ne 1 ] && [ "$PRINT_CMD" -ne 1 ]; then
+    die "--json-schema needs agy's JSON mode (agy >= 1.1.8 advertising --output-format, python3 on PATH, structured_output option not off)"
+  fi
+  ARGS+=(--json-schema "$JSON_SCHEMA")
+fi
+
 # --- dry run: print the resolved (shell-quoted) agy invocation and exit ---
 if [ "$PRINT_CMD" -eq 1 ]; then
   { printf 'agy'; printf ' %q' "${ARGS[@]}" -p "$PROMPT"; printf '\n'; }
@@ -434,7 +453,7 @@ set -e
 # Replaces OUT with the model's text so the stdout contract is unchanged, exposes
 # the structured error for classification, and reports token usage on stderr.
 # Any parse failure falls back to treating OUT as plain text (never fatal).
-JSON_STATUS=""; JSON_ERROR=""
+JSON_STATUS=""; JSON_ERROR=""; JSON_SO=""
 # Glob, not ${OUT//[...]/}: stripping the whole string to test emptiness is minutes-to-
 # hours at tens of KB on macOS /bin/bash 3.2 (n^~2.6); the glob stops at the first hit.
 if [ "$JSON_MODE" -eq 1 ] && [[ "$OUT" = *[!$' \t\n\r']* ]]; then
@@ -449,7 +468,7 @@ if [ "$JSON_MODE" -eq 1 ] && [[ "$OUT" = *[!$' \t\n\r']* ]]; then
   # "agy failed" (exit 2) instead of MODEL_UNAVAILABLE (14). Let python, which already
   # has the parsed object, write the raw value out.
   JERR="$(mktemp "${TMPDIR:-/tmp}/agy-err.XXXXXX")"
-  meta="$(AGY_JSON="$OUT" AGY_RESP_FILE="$RESP" AGY_ERR_FILE="$JERR" python3 - <<'PY' 2>/dev/null || true
+  meta="$(AGY_JSON="$OUT" AGY_RESP_FILE="$RESP" AGY_ERR_FILE="$JERR" AGY_SCHEMA_REQUESTED="$JSON_SCHEMA" python3 - <<'PY' 2>/dev/null || true
 import json, os, sys
 raw = os.environ.get("AGY_JSON", "")
 try:
@@ -458,8 +477,14 @@ try:
     if not isinstance(d, dict): raise ValueError
 except Exception:
     sys.exit(1)
+so = d.get("structured_output")
 with open(os.environ["AGY_RESP_FILE"], "w", encoding="utf-8") as fh:
-    fh.write(str(d.get("response", "") or ""))
+    # A requested schema makes the structured object the answer; prose is the fallback
+    # only when no schema was asked for.
+    if os.environ.get("AGY_SCHEMA_REQUESTED") and so is not None:
+        fh.write(json.dumps(so, ensure_ascii=False))
+    else:
+        fh.write(str(d.get("response", "") or ""))
 with open(os.environ["AGY_ERR_FILE"], "w", encoding="utf-8") as fh:
     fh.write(" ".join(str(d.get("error", "") or "").split()))
 u = d.get("usage") or {}
@@ -474,6 +499,7 @@ print(json.dumps({
               "thinking": n("thinking_tokens"), "cache_read": n("cache_read_tokens"),
               "total": n("total_tokens")},
     "conversation_id": str(d.get("conversation_id", "") or ""),
+    "structured_output": so is not None,
 }))
 PY
 )"
@@ -481,6 +507,7 @@ PY
     # `status` is a bare enum with no quotes inside it, so sed is safe there.
     JSON_STATUS="$(printf '%s' "$meta" | sed -n 's/.*"status": *"\([^"]*\)".*/\1/p')"
     JSON_ERROR="$(cat "$JERR" 2>/dev/null)"
+    JSON_SO="$(printf '%s' "$meta" | sed -n 's/.*"structured_output": *\(true\|false\).*/\1/p')"
     OUT="$(cat "$RESP" 2>/dev/null)"
     printf 'AGY_USAGE %s\n' "$meta" >&2
     tee_usage "AGY_USAGE $meta"
@@ -545,6 +572,13 @@ $blob"
   shopt -u nocasematch
   signal AGY_FAILED "agy exited $RC"
   exit 2
+fi
+# A schema was requested and agy returned no structured_output: the caller asked for
+# structure, so prose is a failure here, not an answer (exit 16, AGY_SIGNAL SCHEMA_UNMET).
+if [ -n "$JSON_SCHEMA" ] && [ "${JSON_SO:-false}" != "true" ]; then
+  echo "agy-delegate: --json-schema was passed and agy returned no structured_output (the response is prose, not the schema)." >&2
+  signal SCHEMA_UNMET "agy returned no structured_output for the requested --json-schema"
+  exit 16
 fi
 if [[ "$OUT" != *[!$' \t\n\r']* ]]; then   # same glob as above, not the quadratic strip
   # agy >= 1.1.3 soft-denies a tool needing permission in headless mode and returns

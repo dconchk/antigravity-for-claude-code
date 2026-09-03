@@ -132,6 +132,9 @@ case "${STUB_MODE:-text}" in
   # diagnostic text sits AFTER the embedded quotes, so any field extraction that stops
   # at the first `"` loses it and the failure misclassifies. This is what shipped.
   json_err_quoted) printf '{"conversation_id":"","status":"ERROR","response":"","error":"invalid model selection (--model \\"X\\" --effort \\"\\"): model X is not recognized as a known model or custom model in settings","usage":{}}'; exit 1 ;;
+  # agy >= 1.1.8 with --json-schema: the CLI enforces the schema and returns the object as
+  # `structured_output` beside the prose `response` (HOPPER decision 0040).
+  json_schema) printf '{"conversation_id":"c1","status":"SUCCESS","response":"prose you should not see","structured_output":{"ok":true},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}' ;;
   json_quota) printf '{"conversation_id":"","status":"ERROR","response":"","error":"quota exceeded for this model","usage":{}}'; exit 1 ;;
   *)       echo "STUB_OK" ;;
 esac
@@ -445,6 +448,24 @@ out=$("$DELEGATE" --fresh -c --print-command "hi" 2>&1); rc=$?
 check "--fresh with --continue refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
 out=$("$DELEGATE" --fresh --conversation abc123 --print-command "hi" 2>&1); rc=$?
 check "--fresh with --conversation refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
+
+# --json-schema: forwarded to agy's own flag; with a schema, stdout is the structured_output
+# object, a turn that returns none is exit 16 + SCHEMA_UNMET, and a wrapper that cannot turn
+# JSON mode on refuses the flag rather than dropping it (HOPPER decision 0040).
+out=$("$DELEGATE" --json-schema '{"type":"object"}' --print-command "hi" 2>/dev/null); rc=$?
+check "--json-schema -> forwarded in the resolved command" 0 "$rc" -- "--json-schema" "$out"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_schema "$DELEGATE" --json-schema '{"type":"object"}' "hi" 2>"$TMP/schema.err"); rc=$?
+check "--json-schema with structured_output -> stdout is the object" 0 "$rc" '{"ok": true}' "$out"
+if printf '%s' "$out" | grep -q "prose you should not see"; then
+  echo "FAIL: --json-schema leaked the prose response onto stdout"; FAIL=$((FAIL+1));
+else echo "ok: --json-schema keeps the prose response off stdout"; PASS=$((PASS+1)); fi
+check "--json-schema -> AGY_USAGE reports structured_output true" 0 "$rc" '"structured_output": true' "$(cat "$TMP/schema.err")"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_ok "$DELEGATE" --json-schema '{"type":"object"}' "hi" 2>"$TMP/schema.err"); rc=$?
+check "--json-schema without structured_output -> exit 16 + SCHEMA_UNMET" 16 "$rc" "SCHEMA_UNMET" "$(cat "$TMP/schema.err")"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_ok "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "no --json-schema -> the prose response still reaches stdout" 0 "$rc" "JSONBODY" "$out"
+out=$(STUB_JSON_CAPABLE=0 STUB_MODE=json_ok "$DELEGATE" --json-schema '{"type":"object"}' "hi" 2>&1); rc=$?
+check "--json-schema without JSON mode refuses (usage exit)" 1 "$rc" "needs agy's JSON mode" "$out"
 
 # write-task without --yolo -> warn (workspace untouched; issue #10).
 # --mode accept-edits stopped granting headless writes on agy 1.1.3, so it still warns.
