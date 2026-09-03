@@ -176,6 +176,10 @@ scripts/agy-delegate.sh --yolo --dir ./app "Implement X per SPEC.md"
 # live web / Google search (tools need --yolo in headless mode)
 scripts/agy-delegate.sh --tier pro --yolo "Web-search <X>. Give URLs + dates."
 
+# enforced structured output: agy validates the final result against the schema and
+# stdout becomes the structured_output object (exit 16 + AGY_SIGNAL SCHEMA_UNMET if it can't)
+scripts/agy-delegate.sh --json-schema ./receipt.schema.json "Answer as the schema demands."
+
 # Vertex AI Search over internal data
 scripts/agy-delegate.sh --tier pro --yolo "List Vertex AI Search engines (list_engines)."
 

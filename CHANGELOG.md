@@ -3,6 +3,10 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.27.0
+
+- `agy-delegate.sh --json-schema <string-or-path>`: forwarded to agy's own `--json-schema` (agy >= 1.1.8, JSON mode), so the CLI enforces the schema on the final result. With a schema, stdout is the `structured_output` object agy returns; the `AGY_USAGE` line gains `structured_output: true|false`; a turn that returns no structured object exits 16 with `AGY_SIGNAL SCHEMA_UNMET`. A wrapper that cannot turn JSON mode on refuses the flag rather than dropping it. (HOPPER decision 0040: the receipt schema is enforced at the provider.)
+
 ## 0.26.0
 
 - **agy's response-wait timeout now classifies as TIMEOUT (exit 12), not a generic
