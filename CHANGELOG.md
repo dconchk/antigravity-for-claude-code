@@ -5,13 +5,69 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
 
 ## 0.28.0
 
-- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.26.0 (agy 1.1.25 catch-up: the `flash` tiers move to Gemini 3.8 Flash, exit 15 re-measured, CI hardening and dependency updates) into this fork's 0.27.0 line (`--fresh`, the response-wait timeout classified as exit 12, `--json-schema` passthrough). The union of the two lines and nothing else; the fork's numbers were ahead of upstream's, so the merged line is 0.28.0. Both 0.26.0 sections below are kept and labelled.
+- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.27.1 into this fork.
 
-## 0.27.0
+## 0.27.1 (upstream)
+
+- **`agy-migrate` runs on Windows**
+  ([#75](https://github.com/yuting0624/antigravity-for-claude-code/issues/75)): the drive
+  `:` collapses like any other separator, so projects resolve instead of every one of them
+  looking orphaned; the staged native import sets `USERPROFILE` / `HOMEDRIVE` / `HOMEPATH`
+  beside `HOME`, which is what a Go binary actually reads; and the report reconfigures its
+  streams to UTF-8, falling back to ASCII glyphs rather than dying on a console that cannot
+  encode them. Migrate suite 41 -> 44 checks.
+- CONTRIBUTING told contributors to file changelog lines under an "Unreleased" heading the
+  file has never had, which is how the line above first landed inside the already-released
+  0.27.0. It now says what actually happens: a fix takes the next `## x.y.z` heading and the
+  maintainer bumps the two version fields to match; a behaviour change bumps them in its own
+  PR. The suite already pins `plugin.json` and `SKILL.md` to the same version.
+
+## 0.27.0 (fork)
 
 - `agy-delegate.sh --json-schema <string-or-path>`: forwarded to agy's own `--json-schema` (agy >= 1.1.8, JSON mode), so the CLI enforces the schema on the final result. With a schema, stdout is the `structured_output` object agy returns; the `AGY_USAGE` line gains `structured_output: true|false`; a turn that returns no structured object exits 16 with `AGY_SIGNAL SCHEMA_UNMET`. A wrapper that cannot turn JSON mode on refuses the flag rather than dropping it. (HOPPER decision 0040: the receipt schema is enforced at the provider.)
 
-## 0.26.0 (this fork)
+## 0.27.0 (upstream)
+
+Catch-up to agy **1.2.0** — 1.1.26 through 1.2.0 landed in the week after 0.26.0. Two of
+those changes touch the wrapper's contract; both were measured on 1.2.0 before anything
+was written, and one of them had the 0.26.0 wrapper reporting a truncated reply as a
+finished one.
+
+- **An expired `--print-timeout` is no longer a failure on agy's side, and the wrapper was
+  passing the truncation off as success.** agy 1.1.28 returns the partial reply with rc 0,
+  one stderr line — `[agy] print timeout after 5s with turn in progress; returning partial
+  output` — and an envelope that says SUCCESS with every usage counter at zero. Measured
+  through the 0.26.0 wrapper on 1.2.0: exit 0, 1357 bytes of a 2500-word essay on stdout,
+  `AGY_USAGE` of zero. A truncated answer handed to the conductor as a finished one, with
+  the spend unrecorded. It now prints the partial reply and exits **12** with a `TIMEOUT`
+  signal and a note that the usage line undercounts; `--continue` resumes the
+  conversation. Anchored on agy's stderr line, never on the reply — a reply that merely
+  quotes the wording is a success, and a negative control pins that.
+- **`denied_actions` is the exit-15 signal now.** agy 1.1.27 puts the refused tools in the
+  envelope — `[{"action":"write_file","display_name":"WriteToFile"}]` — with the rest of
+  the shape unchanged: rc 0, SUCCESS, an empty response even when the prompt asks for text
+  around the write, the notice on stderr. The JSON path reads that field first and names
+  the tool in its message and `AGY_SIGNAL` (`denied: write_file`); the stderr anchors stay
+  for plain-text mode and older agy. **URL reads are denied headless since 1.1.28** —
+  fetching a URL asks first now — and arrive as `read_url`. The message, and every
+  document that said "web search needs `--yolo`", now say URL reads do too and name the
+  narrow rule, `read_url(<target>)`. The `/antigravity:research` recipe was already
+  passing `--yolo` on both calls, so it keeps working; the sentence explaining why has
+  caught up.
+- Not measured, from agy's notes: 1.1.28 prints fatal `-p` errors with a stable `error:`
+  marker and explains runs that used to end silently; 1.2.0 surfaces a content-filter stop
+  reason instead of a spurious "no candidate found". Neither changed the wrapper; both
+  arrive on stderr and are relayed as before.
+- Tests: fixtures verbatim from 1.2.0 for the write and `read_url` denials and for the
+  partial-timeout reply (JSON and plain), a negative control for the timeout wording, and
+  the exit-15 file-level guard now requires `denied_actions` beside 1.1.13 and 1.1.20.
+  316 -> 327. Each new assertion killed by a mutation: disabling the `denied_actions`
+  block (the soft route still exits 15, but the tool name in the signal disappears),
+  disabling the partial-timeout block, letting the timeout check read the reply, and
+  rewriting `denied_actions` in README, and making the partial-timeout note mention
+  `AGY_USAGE` unconditionally again (plain-text mode prints no such line).
+
+## 0.26.0 (fork)
 
 - **agy's response-wait timeout now classifies as TIMEOUT (exit 12), not a generic
   failure.** Measured on agy 1.1.22: when print mode gives up waiting for the model's
@@ -27,7 +83,8 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
   caller's result). `--fresh` passes agy `--new-project`, which keys a new project to
   the working directory — a new project cannot hold an old conversation. Refused in
   combination with `-c/--continue` or `--conversation`, which ask for the opposite.
-## 0.26.0 (upstream yuting0624)
+
+## 0.26.0 (upstream)
 
 Catch-up to agy **1.1.25** — the newest upstream release, so nothing here asks you to update
 agy; it asks whether what the wrapper says about agy is still true. The last route-level
