@@ -5,9 +5,100 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
 
 ## 0.28.0
 
-- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.27.1 into this fork.
+- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.27.4 into this fork.
 
-## 0.27.1 (upstream)
+## 0.27.4
+
+- **CI refuses a CHANGELOG entry filed under a section that has already shipped.** #77
+  put its line inside the released 0.27.0, and #82 did it again — branched before #81
+  opened `## 0.27.2`, merged after. Neither is a git conflict, because the two PRs touch
+  different lines of the same file, so both were caught by eye after merging and both
+  cost a later `release:` commit that only moved paragraphs. No rule over one file can
+  see this: which lines are new is not in the file. So on `pull_request` the suite reads
+  the base's `CHANGELOG.md` and `plugin.json` and judges only the added lines — they may
+  sit under a heading this PR opens, or under the newest heading when its version is
+  ahead of the base's, which is what a `release:` PR needs. Where there is no base, on a
+  local run or a push, it reports **skipped** and the summary line grows a `SKIP=` field;
+  a check that could not run is not one that passed.
+  Measured against the real merge commits rather than only fixtures: #77 and #82 fail,
+  #76, #80, #81, #84 and #85 pass. **#87 fails too** — it added to `## 0.27.3` after #85
+  had shipped that version, which is the stacked-PR limitation now written down in
+  CONTRIBUTING: rebasing onto master is not enough once the other PR has merged, the
+  entry needs the next heading. Rewording a section that has already shipped fails too,
+  and no shape of PR makes it pass — a `release:` PR does not, because only the newest
+  heading is exempt; since this is not a required status check, a deliberate history edit
+  is merged over the red line and declared. Suite 327 -> 336 checks, plus the one skipped.
+
+## 0.27.3
+
+- **`--include-repos` without `git` on PATH now stops, instead of calling every
+  repository a non-repository.** `git_root()` caught every exception, so a missing git
+  binary was indistinguishable from "not a repository" — and both callers state that
+  second fact out loud. Measured on a HOME whose single recorded project *is* a git
+  repository, with git removed from PATH: the dry run reported its `CLAUDE.md` as
+  `not-a-repo` ("not in a git repository"), its memory as `out-of-reach` ("consider
+  global scope"), never proposed the `AGENTS.md` symlink, and exited **0** — 3 to
+  apply / 0 warnings / 0 skipped became 2 / 1 / 1, every difference a falsehood. The
+  flag now checks for git up front and exits **18**, the code already used for a
+  missing prerequisite, naming both ways out; git is asked for only when the flag is
+  passed, so an ordinary run is unchanged and says nothing about git.
+  `git_root()` no longer swallows `FileNotFoundError` either, so a future caller cannot
+  inherit the same confusion. Migrate suite 48 -> 51 checks.
+- **`%APPDATA%` and `%LOCALAPPDATA%` are excluded whole, the way `~/Library` already
+  was.** The exclusion list is unconditional — an entry that does not exist never
+  matches — and it held all of macOS's `~/Library` but only two named leaves under
+  `%LOCALAPPDATA%`, so `AppData`, which is not dot-prefixed, was otherwise walked in
+  full. Dart and Flutter defaulted to `%APPDATA%\Pub\Cache` (Roaming) before Dart 3.0,
+  and a cached package can be a git clone, so neither the leaf list nor 0.27.2's
+  git-repo rule kept that one out; pip, npm, pnpm, Temp and every editor's extension
+  tree were in the same position. The two leaves are gone, subsumed: dropping the new
+  roots fails the two package-cache checks 0.27.2 added as well as the two new ones.
+  Still no `os.name` branch in the exclusion list — the file's only one is in
+  `native_import_env()`, where the staging HOME needs Windows' own home variables.
+  **A project kept inside `AppData` is no longer scanned** — the same trade `~/Library`
+  has always made, and the exclusion is silent.
+- **The exclusion list is built once per process, not per call.** `under_excluded()`
+  rebuilt it every time — three `expanduser`, six environment reads, the joins, then
+  `abspath` + `normcase` over every root — and since 0.27.2 it runs on each `dirpath` as
+  well as each child, roughly twice per directory. Measured over 200k calls on the same
+  machine: **18.47 us/call before, 1.26 us/call after, 93% less**, or ~37 us to ~2.5 us
+  per directory walked, against ~63 us for `os.walk` itself on a warm local filesystem.
+  Safe to cache: nothing in the tool writes to `os.environ`, and every run is a fresh
+  process. Migrate suite 51 -> 54 checks.
+
+## 0.27.2
+
+- **Docs: user-level Claude Code assets are no longer described as nonexistent**
+  ([#79](https://github.com/yuting0624/antigravity-for-claude-code/issues/79)).
+  `docs/MIGRATION.md` listed `~/.claude/agents/`, `~/.claude/commands/` and
+  `~/.claude/CLAUDE.md` as locations people will not find, and said hooks exist only inside
+  plugins. All four are real once the user creates them (hooks live under `settings.json`'s
+  `hooks` key). They are now in the §1 layout table and the §6 matrix as *not read*, and the
+  README asset table says what becomes of them instead of leaving them out. No behaviour
+  change.
+
+- **`--include-repos` no longer proposes `AGENTS.md` symlinks inside package caches**
+  ([#78](https://github.com/yuting0624/antigravity-for-claude-code/issues/78)): `~` is
+  routinely one of the directories `~/.claude.json` records, and the scan then walks the
+  whole home directory — so a real run offered 6 symlinks and 8 conflicts inside Dart pub
+  and uv caches, vendored source a package manager owns and replaces. The flag now writes
+  only inside a git repository, which is what its name and the docs already claimed, and a
+  `CLAUDE.md` outside one is reported as a `not-a-repo` skip rather than dropped in
+  silence. Git alone would not have covered uv's `git-v0/checkouts/`, which holds real
+  clones, so the pub, uv and Go module cache roots join the excluded trees beside
+  `node_modules` and each tool's own config dir — the same run had 23 more `CLAUDE.md`
+  files in `$GOPATH/pkg/mod`. Measured over one real `$HOME`, that run goes from 31
+  proposals and 17 conflicts, 25 and 12 of them vendored, to 6 and 5, none vendored.
+  Migrate suite 44 -> 47 checks (on top of 0.27.1).
+- **A root that is itself an excluded tree is no longer scanned** — found while measuring
+  the fix above. `walk_user_tree()` pruned excluded *children*, so `~/.claude`, a recorded
+  project on any machine where Claude Code has been run from the home directory and often
+  a git repository of its own, was walked as a root: `--include-repos` offered an
+  `AGENTS.md` symlink beside `~/.claude/CLAUDE.md`, inside the tree this tool treats as
+  read-only. The exclusion is tested on each `dirpath` now, not only on the names below
+  it. One more check, 48.
+
+## 0.27.1
 
 - **`agy-migrate` runs on Windows**
   ([#75](https://github.com/yuting0624/antigravity-for-claude-code/issues/75)): the drive

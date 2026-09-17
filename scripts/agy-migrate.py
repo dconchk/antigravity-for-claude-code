@@ -8,7 +8,8 @@ Design constraints, all of them learned the hard way from probing agy 1.1.12
 
   * The Claude Code config dir is treated as READ-ONLY. The only file this tool
     can ever create on the Claude side is an `AGENTS.md` symlink beside an
-    existing `CLAUDE.md`, and only under --include-repos.
+    existing `CLAUDE.md`, and only under --include-repos, and only inside a git
+    repository — a scan rooted at `~` also reaches vendored dependency source.
   * Antigravity rules are silently ignored unless their frontmatter carries
     `trigger: always_on`. No error, no warning — they just never load. So
     migrated memory is REWRITTEN with that frontmatter, never stripped.
@@ -23,6 +24,7 @@ Design constraints, all of them learned the hard way from probing agy 1.1.12
 """
 
 import argparse
+import functools
 import json
 import ntpath
 import os
@@ -222,11 +224,23 @@ def default_roots():
 
 
 def git_root(path):
+    """The repository `path` is in, or None when it is in none.
+
+    FileNotFoundError is deliberately NOT caught. "git is not installed" and "this is
+    not a repository" are different facts, and both callers state the second one out
+    loud — so swallowing the first makes the report lie. main() refuses to run with
+    --include-repos when git is absent, which is the only mode that calls this, so the
+    exception is a guard against a future caller rather than something a user meets.
+    The broad except stays for what it was for: a timeout, or a git that fails on its
+    own terms.
+    """
     try:
         out = subprocess.run(["git", "-C", path, "rev-parse", "--show-toplevel"],
                              capture_output=True, text=True, timeout=10)
         if out.returncode == 0:
             return out.stdout.strip()
+    except FileNotFoundError:
+        raise
     except Exception:
         pass
     return None
@@ -441,15 +455,76 @@ def unit_skills(plan, mf):
 SKIP_DIRS = {"node_modules", ".git", ".venv", "venv", "dist", "build", "__pycache__"}
 
 
+def app_data_roots():
+    """Windows' equivalents of macOS's `~/Library`: application state, not the user's work.
+
+    `~/Library` is excluded as a whole tree, but its Windows counterparts were not, and
+    `AppData` is not dot-prefixed, so a scan rooted at `~` walks all of it. Naming the
+    two caches that had been found there one at a time is a losing game: the older Dart
+    and Flutter default is `%APPDATA%\\Pub\\Cache` (Roaming, not Local), and pip, npm,
+    pnpm, Temp and every editor's extension tree live in the same two directories.
+
+    No os.name branch, like the rest of this list — an entry that does not exist simply
+    never matches, which is also what makes the Windows paths testable on POSIX CI.
+    """
+    return [os.environ.get("APPDATA") or os.path.join(home(), "AppData", "Roaming"),
+            os.environ.get("LOCALAPPDATA") or os.path.join(home(), "AppData", "Local")]
+
+
+def package_cache_roots():
+    """Package-manager caches that sit under $HOME without a dot-prefixed name.
+
+    `~` is very often one of the directories Claude Code has recorded, and then the
+    scan walks the whole home directory — the vendored source every package manager
+    unpacks there included. An `AGENTS.md` symlink inside a downloaded package is not
+    a migration; it is litter in a tree the package manager owns and replaces on the
+    next fetch. uv's `git-v0/checkouts/` even holds real clones, so the git-repo rule
+    in unit_claudemd() does not catch that one on its own.
+
+    Only the visible names need listing, and only the ones outside the roots above.
+    walk_user_tree() already prunes every dot-prefixed directory — `~/.pub-cache`,
+    `~/.cache/uv`, `~/.cargo`, `~/.gradle`, `~/.m2`, `~/.nuget` — along with
+    `node_modules` and `.venv` by name; excluded_roots() covers macOS's
+    `~/Library/Caches` and, via app_data_roots(), the Windows homes of the Dart pub and
+    uv caches. That leaves the three caches a user can move with an environment
+    variable, and Go's module cache, which is `$GOPATH/pkg/mod` on every platform: one
+    run over a real `$HOME` found 23 module-cache `CLAUDE.md` files, none the user's.
+    """
+    roots = [os.environ.get("PUB_CACHE"),          # Dart pub, explicit
+             os.environ.get("UV_CACHE_DIR"),       # uv, explicit
+             os.environ.get("GOMODCACHE")]         # Go modules, explicit
+    # GOPATH is a list, and its default is ~/go on every platform.
+    gopath = os.environ.get("GOPATH") or os.path.join(home(), "go")
+    roots += [os.path.join(g, "pkg", "mod") for g in gopath.split(os.pathsep) if g]
+    return [p for p in roots if p]
+
+
 def excluded_roots():
-    """Never scan either tool's own config tree.
+    """Never scan either tool's own config tree, an app-data tree, or a package cache.
 
     `~/.claude/plugins/marketplaces/` holds cloned marketplace catalogues — hundreds
     of third-party `.mcp.json` files the user never configured. A real run over `$HOME`
     pulled 40 servers out of one. Plugin-owned MCP is the plugins unit's job anyway.
+    `~/Library` and its Windows counterparts are app state; package caches are vendored
+    source. See app_data_roots() and package_cache_roots().
     """
-    return (claude_dir(), gemini_root(), state_dir(),
-            os.path.join(home(), "Library"))
+    return ([claude_dir(), gemini_root(), state_dir(),
+             os.path.join(home(), "Library")]
+            + app_data_roots() + package_cache_roots())
+
+
+@functools.lru_cache(maxsize=1)
+def excluded_roots_normalised():
+    """excluded_roots(), absolute and normcase'd, built once per process.
+
+    under_excluded() is called on every directory the walk reaches AND on each of its
+    children, so roughly twice per directory, and a `$HOME` walk reaches hundreds of
+    thousands. Rebuilding the list each time — three expanduser, six environment reads,
+    the joins, then abspath + normcase over every root — measured 18.47 us per call
+    against 1.26 from the cache over 200k calls, 93% of the cost for an answer that
+    cannot change: nothing here writes to os.environ, and every run is a fresh process.
+    """
+    return tuple(os.path.normcase(os.path.abspath(x)) for x in excluded_roots())
 
 
 def under_excluded(path):
@@ -459,15 +534,28 @@ def under_excluded(path):
     selected via CLAUDE_CONFIG_DIR) because it shares a prefix with `~/.claude`, and
     `~/Library-notes` because of `~/Library`. The exclusion is silent, so that would
     just look like the tool ignoring a directory for no reason.
+
+    normcase() because some excluded roots come from the environment (`LOCALAPPDATA`),
+    which need not agree with os.walk()'s casing on a case-insensitive filesystem.
     """
-    p = os.path.abspath(path)
+    p = os.path.normcase(os.path.abspath(path))
     return any(p == e or p.startswith(e.rstrip(os.sep) + os.sep)
-               for e in (os.path.abspath(x) for x in excluded_roots()))
+               for e in excluded_roots_normalised())
 
 
 def walk_user_tree(root):
-    """os.walk with vendor dirs and both config trees pruned."""
+    """os.walk with vendor dirs and both config trees pruned.
+
+    The check is on `dirpath`, not only on the children, because a root is scanned
+    as given: `~/.claude` is itself a recorded project on any machine where Claude
+    Code has been run from there, and pruning only its children would still offer a
+    symlink beside `~/.claude/CLAUDE.md` — inside the tree this tool treats as
+    read-only.
+    """
     for dirpath, dirnames, filenames in os.walk(root):
+        if under_excluded(dirpath):
+            dirnames[:] = []
+            continue
         dirnames[:] = [
             d for d in dirnames
             if d not in SKIP_DIRS
@@ -495,8 +583,18 @@ def unit_claudemd(plan, mf, roots, include_repos):
         plan.add("claudemd", "skip", "needs-flag", f"{len(mds)} file(s)",
                  "pass --include-repos to create AGENTS.md symlinks")
         return
+    outside = []
     for md in mds:
-        agents = os.path.join(os.path.dirname(md), "AGENTS.md")
+        parent = os.path.dirname(md)
+        # The flag says "repos", and a repository is the one place a CLAUDE.md is
+        # certainly the user's own: the same walk also reaches vendored source, where
+        # a symlink would be litter the package manager replaces on the next fetch.
+        # Reported rather than dropped — a CLAUDE.md in a plain directory someone
+        # really does work in would otherwise vanish from the plan without a word.
+        if git_root(parent) is None:
+            outside.append(parent)
+            continue
+        agents = os.path.join(parent, "AGENTS.md")
         if os.path.islink(agents):
             plan.add("claudemd", "skip", "exists", agents, "already a symlink")
             continue
@@ -510,6 +608,13 @@ def unit_claudemd(plan, mf, roots, include_repos):
             mf.symlinks.append(agents)
 
         plan.add("claudemd", "ok", "symlink", agents, "-> CLAUDE.md", fn)
+
+    if outside:
+        shown = ", ".join(outside[:3])
+        if len(outside) > 3:
+            shown += f", and {len(outside) - 3} more"
+        plan.add("claudemd", "skip", "not-a-repo", f"{len(outside)} file(s)",
+                 f"not in a git repository, so --include-repos leaves them alone: {shown}")
 
 
 # --- unit: memory ------------------------------------------------------------
@@ -1438,6 +1543,18 @@ def main(argv=None):
     if not os.path.isdir(gemini_root()):
         print(f"{C['err']}No Antigravity install at {gemini_root()} "
               f"— run agy once first{C['off']}")
+        return 18
+    # git decides which directories are repositories, and both write paths behind
+    # --include-repos ask it. Without git, git_root() answers None for every path and
+    # the report states a falsehood: a real repository is announced as `not-a-repo`
+    # ("not in a git repository"), its memory as `out-of-reach` ("consider global
+    # scope"), and the CLAUDE.md symlink is quietly never proposed — all under a clean
+    # rc 0. Only this flag needs git, so an ordinary run is left alone.
+    if args.include_repos and shutil.which("git") is None:
+        print(f"{C['err']}--include-repos needs git on PATH: git is what decides "
+              f"which directories are repositories{C['off']}\n"
+              f"Install git, or drop --include-repos — without it the run reports "
+              f"repo-scoped work as skipped instead of guessing.")
         return 18
 
     only = {u for u in args.only.split(",") if u} or set(UNITS)
