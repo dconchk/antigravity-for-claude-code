@@ -5,11 +5,7 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
 
 ## 0.29.0
 
-- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.28.0 (`AGY_USAGE` names model, tier, duration and turns; CI dependency bumps) into this fork. The fork's `--json-schema` passthrough and `--fresh` are kept.
-
-## 0.28.0
-
-- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.27.4 into this fork.
+- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.28.0 into this fork; the fork's `--json-schema` passthrough and `--fresh` are kept. Upstream's 0.28.0 entry, arriving here:
 - **`AGY_USAGE` now names the model that ran, the tier it was picked from, and agy's own
   `duration_seconds` / `num_turns`.** The line carried status, error, five token counters
   and the conversation id, but not *which* model produced them — so pricing a mixed-tier
@@ -25,6 +21,11 @@ All notable changes to **Antigravity for Claude Code**. Format loosely follows
   fallbacks and the 1.2.x passthrough; dropping the key, the tier bookkeeping or the
   passthrough fails them. README, SKILL.md and the PoC playbook's measurement table say
   so. Suite 336 -> 345.
+- **`--json-schema` works on macOS `/bin/bash 3.2`.** `structured_output` was read out of the usage line with a GNU-only `\|` alternation in `sed`, which BSD `sed` treats literally, so every schema call on macOS exited 16 (`SCHEMA_UNMET`) with the object in hand; the CI job for bash 3.2 had been red on the fork since the seam landed. The pattern is now a POSIX bracket class.
+
+## 0.28.0
+
+- Merge of upstream `yuting0624/antigravity-for-claude-code` 0.27.4 into this fork.
 
 ## 0.27.4
 

@@ -558,7 +558,7 @@ PY
     JSON_STATUS="$(printf '%s' "$meta" | sed -n 's/.*"status": *"\([^"]*\)".*/\1/p')"
     JSON_ERROR="$(cat "$JERR" 2>/dev/null)"
     JSON_DENIED="$(cat "$JDEN" 2>/dev/null)"
-    JSON_SO="$(printf '%s' "$meta" | sed -n 's/.*"structured_output": *\(true\|false\).*/\1/p')"
+    JSON_SO="$(printf '%s' "$meta" | sed -n 's/.*"structured_output": *\([a-z]*\).*/\1/p')"
     OUT="$(cat "$RESP" 2>/dev/null)"
     printf 'AGY_USAGE %s\n' "$meta" >&2
     tee_usage "AGY_USAGE $meta"
