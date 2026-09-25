@@ -3,6 +3,10 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.29.1
+
+- **`--effort` and `--agent` are forwarded to agy.** `agy` takes `--effort <low|medium|high|max>` and `--agent <name>`, but the wrapper's argument assembly passed neither, so a caller's requested effort never reached the provider. Both are now accepted and forwarded unchanged when given, and nothing is added when they are not; an effort outside the four agy lists is refused as a usage error. Three checks pin the forwarding and the refusal.
+
 ## 0.29.0
 
 - Merge of upstream `yuting0624/antigravity-for-claude-code` 0.28.0 into this fork; the fork's `--json-schema` passthrough and `--fresh` are kept. Upstream's 0.28.0 entry, arriving here:

@@ -497,6 +497,14 @@ check "--fresh with --continue refuses (usage exit)" 1 "$rc" "cannot be combined
 out=$("$DELEGATE" --fresh --conversation abc123 --print-command "hi" 2>&1); rc=$?
 check "--fresh with --conversation refuses (usage exit)" 1 "$rc" "cannot be combined" "$out"
 
+# --effort and --agent: forwarded to agy's own flags; an effort agy does not take is refused.
+out=$("$DELEGATE" --effort high --print-command "hi" 2>/dev/null); rc=$?
+check "--effort -> forwarded in the resolved command" 0 "$rc" -- "--effort high" "$out"
+out=$("$DELEGATE" --agent reviewer --print-command "hi" 2>/dev/null); rc=$?
+check "--agent -> forwarded in the resolved command" 0 "$rc" -- "--agent reviewer" "$out"
+out=$("$DELEGATE" --effort extreme --print-command "hi" 2>&1); rc=$?
+check "--effort outside low|medium|high|max refuses (usage exit)" 1 "$rc" "invalid --effort" "$out"
+
 # --json-schema: forwarded to agy's own flag; with a schema, stdout is the structured_output
 # object, a turn that returns none is exit 16 + SCHEMA_UNMET, and a wrapper that cannot turn
 # JSON mode on refuses the flag rather than dropping it (HOPPER decision 0040).
