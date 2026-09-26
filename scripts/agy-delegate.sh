@@ -36,6 +36,8 @@
 #                                    applied at all (1.1.12 fixed it being ignored headless),
 #                                    the write is denied exactly like one without it. Use a
 #                                    permissions.allow rule or --yolo. plan: strategize only.
+#       --effort <low|medium|high|max>  Reasoning effort, forwarded to agy's own --effort
+#       --agent <name>               Agent for the session, forwarded to agy's own --agent
 #   -c, --continue                   Resume the most recent agy conversation (stateful)
 #       --conversation <id>          Resume a specific agy conversation by ID (stateful)
 #       --fresh                      Guarantee a NEW conversation: create a new agy project
@@ -90,6 +92,8 @@ JSON_SCHEMA=""
 SANDBOX=0
 DIGEST=0
 MODE=""
+EFFORT=""
+AGENT=""
 ADD_DIRS=()
 PROMPT=""
 CONTINUE=0
@@ -257,6 +261,11 @@ while [ $# -gt 0 ]; do
                     case "$MODE" in accept-edits|plan) ;;
                       *) die "invalid --mode '$MODE' (use accept-edits | plan; agy >= 1.1.0)" ;;
                     esac ;;
+    --effort)       need "$#" "$1"; EFFORT="$2"; shift 2
+                    case "$EFFORT" in low|medium|high|max) ;;
+                      *) die "invalid --effort '$EFFORT' (use low | medium | high | max)" ;;
+                    esac ;;
+    --agent)        need "$#" "$1"; AGENT="$2"; shift 2 ;;
     -c|--continue)  CONTINUE=1; shift ;;            # resume most recent agy conversation
     --conversation) need "$#" "$1"; CONV_ID="$2"; shift 2 ;; # resume a specific conversation by ID
     --fresh)        FRESH=1; shift ;;               # force a new conversation via a new cwd-keyed project
@@ -362,6 +371,8 @@ ARGS=(--model "$MODEL" --print-timeout "$TIMEOUT")
 for d in "${ADD_DIRS[@]:-}"; do [ -n "$d" ] && ARGS+=(--add-dir "$d"); done
 [ "$YOLO" -eq 1 ]      && ARGS+=(--dangerously-skip-permissions)
 [ -n "$MODE" ]         && ARGS+=(--mode "$MODE")     # agy >= 1.1.0
+[ -n "$EFFORT" ]       && ARGS+=(--effort "$EFFORT")
+[ -n "$AGENT" ]        && ARGS+=(--agent "$AGENT")
 [ "$SANDBOX" -eq 1 ]   && ARGS+=(--sandbox)
 [ "$CONTINUE" -eq 1 ]  && ARGS+=(--continue)        # keep working context on the cheap (Gemini) side
 [ -n "$CONV_ID" ]      && ARGS+=(--conversation "$CONV_ID")
