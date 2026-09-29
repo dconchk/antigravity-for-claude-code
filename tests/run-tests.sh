@@ -162,6 +162,18 @@ case "${STUB_MODE:-text}" in
   # agy >= 1.1.8 with --json-schema: the CLI enforces the schema and returns the object as
   # `structured_output` beside the prose `response` (HOPPER decision 0040).
   json_schema) printf '{"conversation_id":"c1","status":"SUCCESS","response":"prose you should not see","structured_output":{"ok":true},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}' ;;
+  # agy 1.2.12 --output-format stream-json: NDJSON events, the last a result event whose
+  # `result` is the json-mode envelope (shape measured live). Each mode answers only when
+  # it was really asked for stream-json, so a wrapper that kept json mode fails the test.
+  stream_schema|stream_noso|stream_ok)
+    case " $* " in *" --output-format stream-json "*) ;; *) echo "NOT_STREAM"; exit 0 ;; esac
+    printf '%s\n' '{"event":"init","conversation_id":"s1","init":{"model":"m"}}'
+    printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"s1","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"view_file"}}'
+    case "$STUB_MODE" in
+      stream_schema) printf '%s\n' '{"event":"result","result":{"conversation_id":"s1","status":"SUCCESS","response":"prose you should not see","structured_output":{"ok":true},"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}' ;;
+      stream_noso)   printf '%s\n' '{"event":"result","result":{"conversation_id":"s1","status":"SUCCESS","response":"STREAMBODY","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}' ;;
+      stream_ok)     printf '%s\n' '{"event":"result","result":{"conversation_id":"s1","status":"SUCCESS","response":"STREAMBODY\n","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}' ;;
+    esac ;;
   json_quota) printf '{"conversation_id":"","status":"ERROR","response":"","error":"quota exceeded for this model","usage":{}}'; exit 1 ;;
   *)       echo "STUB_OK" ;;
 esac
@@ -522,6 +534,32 @@ out=$(STUB_JSON_CAPABLE=1 STUB_MODE=json_ok "$DELEGATE" "hi" 2>/dev/null); rc=$?
 check "no --json-schema -> the prose response still reaches stdout" 0 "$rc" "JSONBODY" "$out"
 out=$(STUB_JSON_CAPABLE=0 STUB_MODE=json_ok "$DELEGATE" --json-schema '{"type":"object"}' "hi" 2>&1); rc=$?
 check "--json-schema without JSON mode refuses (usage exit)" 1 "$rc" "needs agy's JSON mode" "$out"
+
+# --stream-file: agy runs stream-json, the whole stream lands in the file, and stdout /
+# exit codes / --json-schema are JSON mode's, read from the final result event (HOPPER 0380).
+SF="$TMP/turn.stream.jsonl"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=stream_schema "$DELEGATE" --stream-file "$SF" --json-schema '{"type":"object"}' "hi" 2>"$TMP/stream.err"); rc=$?
+check "--stream-file + --json-schema -> stdout is the structured_output" 0 "$rc" '{"ok": true}' "$out"
+if [ "$out" = '{"ok": true}' ]; then echo "ok: --stream-file stdout is the object alone (no stream, no prose)"; PASS=$((PASS+1));
+else echo "FAIL: --stream-file stdout is not the object alone: $out"; FAIL=$((FAIL+1)); fi
+check "--stream-file -> the file holds the tool-call event" 0 "$rc" '"tool_name":"view_file"' "$(cat "$SF" 2>/dev/null)"
+check "--stream-file -> the file holds the final result event" 0 "$rc" '"event":"result"' "$(cat "$SF" 2>/dev/null)"
+check "--stream-file -> AGY_USAGE still reported from the result" 0 "$rc" '"structured_output": true' "$(cat "$TMP/stream.err")"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=stream_noso "$DELEGATE" --stream-file "$SF" --json-schema '{"type":"object"}' "hi" 2>"$TMP/stream.err"); rc=$?
+check "--stream-file + --json-schema, no structured_output -> exit 16 + SCHEMA_UNMET" 16 "$rc" "SCHEMA_UNMET" "$(cat "$TMP/stream.err")"
+check "--stream-file kept the stream on exit 16" 16 "$rc" '"event":"result"' "$(cat "$SF" 2>/dev/null)"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=stream_ok "$DELEGATE" --stream-file "$SF" "hi" 2>/dev/null); rc=$?
+check "--stream-file without a schema -> stdout is the response, as in JSON mode" 0 "$rc" "STREAMBODY" "$out"
+if [ "$out" = "STREAMBODY" ]; then echo "ok: --stream-file prose stdout matches JSON mode byte for byte"; PASS=$((PASS+1));
+else echo "FAIL: --stream-file prose stdout differs from JSON mode: $out"; FAIL=$((FAIL+1)); fi
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=stream_ok "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "no --stream-file -> JSON mode unchanged (agy never asked for stream-json)" 0 "$rc" "NOT_STREAM" "$out"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=args "$DELEGATE" "hi" 2>/dev/null); rc=$?
+check "no --stream-file -> agy still gets --output-format json" 0 "$rc" "--output-format json" "$out"
+out=$(STUB_JSON_CAPABLE=0 STUB_MODE=stream_ok "$DELEGATE" --stream-file "$SF" "hi" 2>&1); rc=$?
+check "--stream-file without stream-json mode refuses (usage exit)" 1 "$rc" "needs agy's stream-json mode" "$out"
+out=$(STUB_JSON_CAPABLE=1 STUB_MODE=stream_ok "$DELEGATE" --stream-file "$TMP/no-such-dir/x.jsonl" "hi" 2>&1); rc=$?
+check "--stream-file to an unwritable path refuses before the turn" 1 "$rc" "cannot write --stream-file" "$out"
 
 # write-task without --yolo -> warn (workspace untouched; issue #10).
 # --mode accept-edits stopped granting headless writes on agy 1.1.3, so it still warns.
