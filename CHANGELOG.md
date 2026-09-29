@@ -3,6 +3,10 @@
 All notable changes to **Antigravity for Claude Code**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions are in `.claude-plugin/plugin.json`.
 
+## 0.29.2
+
+- **`--stream-file <path>` keeps the whole turn as evidence.** JSON mode keeps only agy's final envelope, so none of a turn's tool calls or intermediate messages survive it. With `--stream-file`, agy runs with `--output-format stream-json` and writes every event straight into the named file (it can be followed while the turn runs); the delegate reads the stream's final `result` event — which on agy 1.2.12 is exactly the envelope `--output-format json` prints, measured on a success with a schema and on an error — and hands it to the unchanged JSON-mode unwrap. So stdout, exit codes, `AGY_USAGE` and `--json-schema` (the `structured_output` object on stdout, exit 16 + `SCHEMA_UNMET` when it is missing) are what JSON mode gives. A stream with no result event prints nothing from the stream. A wrapper that cannot turn stream-json on refuses the flag, and an unwritable path is refused before a turn is spent. Without the flag nothing changes. Thirteen checks pin it (HOPPER ticket 0380).
+
 ## 0.29.1
 
 - **`--effort` and `--agent` are forwarded to agy.** `agy` takes `--effort <low|medium|high|max>` and `--agent <name>`, but the wrapper's argument assembly passed neither, so a caller's requested effort never reached the provider. Both are now accepted and forwarded unchanged when given, and nothing is added when they are not; an effort outside the four agy lists is refused as a usage error. Three checks pin the forwarding and the refusal.

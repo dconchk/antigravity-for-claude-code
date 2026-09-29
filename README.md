@@ -182,6 +182,11 @@ scripts/agy-delegate.sh --tier pro --yolo "Web-search <X>. Give URLs + dates."
 # stdout becomes the structured_output object (exit 16 + AGY_SIGNAL SCHEMA_UNMET if it can't)
 scripts/agy-delegate.sh --json-schema ./receipt.schema.json "Answer as the schema demands."
 
+# keep the whole turn as evidence: agy runs --output-format stream-json and every event
+# (tool calls, intermediate messages, final result) lands in the file; stdout, exit codes
+# and --json-schema behave exactly as without it (read from the stream's final result)
+scripts/agy-delegate.sh --stream-file ./turn.stream.jsonl --json-schema ./receipt.schema.json "Answer as the schema demands."
+
 # Vertex AI Search over internal data
 scripts/agy-delegate.sh --tier pro --yolo "List Vertex AI Search engines (list_engines)."
 

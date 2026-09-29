@@ -28,7 +28,12 @@
 #       --json-schema <str|path>     Enforce structured output: forwarded to agy's own --json-schema
 #                                    (agy >= 1.1.8, JSON mode). With a schema, stdout is the
 #                                    `structured_output` object agy returns, not the prose response.
-#       --sandbox                    Run agent with terminal sandbox restrictions
+#       --stream-file <path>         Keep the whole turn as evidence: agy runs with
+#                                    --output-format stream-json and every event (tool calls,
+#                                    intermediate messages, the final result) is written to <path>.
+#                                    stdout, exit codes and --json-schema behave exactly as in JSON
+#                                    mode — they are read from the stream's final result event.
+#       --sandbox                   Run agent with terminal sandbox restrictions
 #       --digest                     Append a digest-only output contract to the prompt
 #                                    (ingest digests, not raw dumps — the biggest cost lever)
 #       --mode <accept-edits|plan>   agy execution mode (agy >= 1.1.0). accept-edits is NOT a
@@ -89,6 +94,8 @@ TIER_EXPLICIT=0
 MODEL=""
 YOLO=0
 JSON_SCHEMA=""
+STREAM_FILE=""
+STREAM_MODE=0
 SANDBOX=0
 DIGEST=0
 MODE=""
@@ -255,6 +262,7 @@ while [ $# -gt 0 ]; do
     --timeout)      need "$#" "$1"; TIMEOUT="$2"; shift 2 ;;
     --yolo)         YOLO=1; shift ;;
     --json-schema)  need "$#" "$1"; JSON_SCHEMA="$2"; shift 2 ;;
+    --stream-file)  need "$#" "$1"; STREAM_FILE="$2"; shift 2 ;;
     --sandbox)      SANDBOX=1; shift ;;
     --digest)       DIGEST=1; shift ;;               # ask agy for a digest-only reply
     --mode)         need "$#" "$1"; MODE="$2"; shift 2
@@ -431,7 +439,18 @@ case "$(printf '%s' "$raw_so" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
       # `|| true` so the assignment cannot fail under `set -e` and skip the rm.
       agy_help="$(cat "$HELPF" 2>/dev/null || true)"; rm -f "$HELPF"
       case "$agy_help" in
-        *--output-format*) JSON_MODE=1; ARGS+=(--output-format json) ;;
+        *--output-format*)
+          JSON_MODE=1
+          # --stream-file: the same envelope arrives as the stream's final result event,
+          # so JSON mode's whole contract still holds; only the transport changes.
+          if [ -n "$STREAM_FILE" ]; then
+            case "$agy_help" in
+              *stream-json*) STREAM_MODE=1; ARGS+=(--output-format stream-json) ;;
+              *) ARGS+=(--output-format json) ;;
+            esac
+          else
+            ARGS+=(--output-format json)
+          fi ;;
       esac
     fi ;;
 esac
@@ -447,6 +466,18 @@ if [ -n "$JSON_SCHEMA" ]; then
     die "--json-schema needs agy's JSON mode (agy >= 1.1.8 advertising --output-format, python3 on PATH, structured_output option not off)"
   fi
   ARGS+=(--json-schema "$JSON_SCHEMA")
+fi
+
+# --- full-stream evidence (--stream-file) ---------------------------------------
+# agy's --output-format stream-json emits one NDJSON event per line: init, every
+# step_update (tool calls, intermediate text), then {"event":"result","result":{...}},
+# whose `result` is exactly the envelope --output-format json prints (measured on agy
+# 1.2.12, success and error alike). agy writes the stream straight into the caller's
+# file, and the delegate reads that final envelope back out of it, so stdout, exit codes
+# and --json-schema are JSON mode's. Like --json-schema, a wrapper that cannot turn the
+# mode on refuses rather than silently keeping no evidence.
+if [ -n "$STREAM_FILE" ] && [ "$STREAM_MODE" -ne 1 ] && [ "$PRINT_CMD" -ne 1 ]; then
+  die "--stream-file needs agy's stream-json mode (agy advertising --output-format stream-json, python3 on PATH, structured_output option not off)"
 fi
 
 # --- dry run: print the resolved (shell-quoted) agy invocation and exit ---
@@ -465,6 +496,14 @@ ERR="$(mktemp "${TMPDIR:-/tmp}/agy-delegate.XXXXXX")"
 # file is inherited harmlessly. agy 1.1.24 fixed the upstream cause (FD_CLOEXEC on
 # the preserved streams); the file route stays — it costs nothing, and older agy hangs.
 OUTF="$(mktemp "${TMPDIR:-/tmp}/agy-out.XXXXXX")"
+# With --stream-file, agy's stdout goes straight to the caller's file (never removed by
+# the trap: it is the evidence), so a long turn can be followed while it runs. Opened
+# here, before any turn is spent, so an unwritable path costs nothing.
+RUN_OUT="$OUTF"
+if [ "$STREAM_MODE" -eq 1 ]; then
+  { : >"$STREAM_FILE"; } 2>/dev/null || die "cannot write --stream-file '$STREAM_FILE'"
+  RUN_OUT="$STREAM_FILE"
+fi
 
 # Wall-clock guard: on a non-TTY caller (the whole point of this wrapper), agy can
 # hard-hang before its own --print-timeout engages (notably native Windows without
@@ -483,13 +522,38 @@ fi
 set +e
 if [ -n "$TO_CMD" ]; then
   # --kill-after sends SIGKILL if agy ignores the initial SIGTERM (defensive).
-  "$TO_CMD" --kill-after=10 "$TO_SECS" agy "${ARGS[@]}" -p "$PROMPT" < /dev/null >"$OUTF" 2>"$ERR"
+  "$TO_CMD" --kill-after=10 "$TO_SECS" agy "${ARGS[@]}" -p "$PROMPT" < /dev/null >"$RUN_OUT" 2>"$ERR"
   RC=$?
 else
-  agy "${ARGS[@]}" -p "$PROMPT" < /dev/null >"$OUTF" 2>"$ERR"
+  agy "${ARGS[@]}" -p "$PROMPT" < /dev/null >"$RUN_OUT" 2>"$ERR"
   RC=$?
 fi
-OUT="$(cat "$OUTF" 2>/dev/null)"
+if [ "$STREAM_MODE" -eq 1 ]; then
+  # The envelope is the LAST result event's `result`, re-serialized so the JSON-mode
+  # unwrap below reads it unchanged. A stream with no result event (a killed or
+  # truncated turn) yields an empty OUT: the raw stream never reaches stdout, and the
+  # exit code comes from agy's rc and stderr exactly as an empty JSON-mode reply would.
+  OUT="$(AGY_STREAM_FILE="$STREAM_FILE" python3 - <<'PY' 2>/dev/null || true
+import json, os
+last = None
+with open(os.environ["AGY_STREAM_FILE"], encoding="utf-8", errors="replace") as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line, strict=False)
+        except Exception:
+            continue
+        if isinstance(ev, dict) and ev.get("event") == "result" and isinstance(ev.get("result"), dict):
+            last = ev["result"]
+if last is not None:
+    print(json.dumps(last, ensure_ascii=False))
+PY
+)"
+else
+  OUT="$(cat "$OUTF" 2>/dev/null)"
+fi
 set -e
 
 # --- unwrap the structured envelope (JSON mode) --------------------------------
